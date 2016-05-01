@@ -46,7 +46,7 @@ public class RadixTrie<V> implements Map<String, V> {
     @Override
     public V get(Object key) {
         String keyStr = (String) key;
-        RadixTrieNode<V> node = getNode(root, keyStr);
+        RadixTrieNode<V> node = getNode(root, keyStr.toCharArray(), 0);
         if (node != null) {
             return node.value;
         } else {
@@ -62,7 +62,7 @@ public class RadixTrie<V> implements Map<String, V> {
             // we *could* allow this if the root is allowed to hold a value.
             throw new IllegalArgumentException("Supplied key is an empty string: cannot map values based on empty strings");
         }
-        return putAtNode(this, root, key, value);
+        return putAtNode(this, root, key.toCharArray(), 0, value, true);
     }
 
     @Override
@@ -79,24 +79,26 @@ public class RadixTrie<V> implements Map<String, V> {
     }
 
     // package private for unit testing
-    static <V> V putAtNode(RadixTrie<V> trie, RadixTrieNode<V> node, String key, V value) {
+    static <V> V putAtNode(RadixTrie<V> trie, RadixTrieNode<V> node, char[] key, int offset, V value, boolean incrementSize) {
         List<RadixTrieNode<V>> children = node.children;
         if (children == null) {
             children = new ArrayList<>();
             node.children = children;
         }
         if (children.isEmpty()) {
-            children.add(createValueNode(key, value));
-            trie.size++;
+            children.add(createValueNode(key, offset, value));
+            if (incrementSize) {
+                trie.size++;
+            }
         } else {
             boolean inserted = false;
             for (int i = 0; i < children.size(); i++) {
                 RadixTrieNode<V> child = children.get(i);
-                String prefix = child.prefix;
-                int commonCharacters = numCharsInCommonPrefix(child.chars, key);
+                char[] prefix = child.chars;
+                int commonCharacters = numCharsInCommonPrefix(child.chars, key, offset);
                 if (commonCharacters > 0) {
-                    int prefixLength = prefix.length();
-                    int keyLength = key.length();
+                    int prefixLength = prefix.length;
+                    int keyLength = key.length - offset;
                     if (commonCharacters == keyLength) {
                         // exact match, replace the node
                         V oldValue = child.value;
@@ -104,45 +106,70 @@ public class RadixTrie<V> implements Map<String, V> {
                         return oldValue;
                     } else if (commonCharacters == prefixLength) {
                         // child node is a prefix for key, descend deeper in the tree
-                        key = key.substring(commonCharacters, keyLength);
-                        return putAtNode(trie, child, key, value);
+                        return putAtNode(trie, child, key, offset + commonCharacters, value, true);
                     } else {
                         // only partial overlap
-                        // create a new parent node with common prefix, then re-parent this child
-                        child = children.remove(i);
+                        // take this child node, and make it into a new parent node of both the incoming data
+                        // and the child data
 
-                        // create an add the new parent
-                        RadixTrieNode<V> newParent = new RadixTrieNode<>();
-                        newParent.setPrefix(key.substring(0, commonCharacters));
-                        children.add(i, newParent);
-
-                        String newChildPrefix = prefix.substring(commonCharacters, prefixLength);
-                        putAtNode(trie, newParent, newChildPrefix, child.value); // reparent the previous node data
+                        // first take the data of the child, and insert it under the child with a truncated common prefix
+//                        putAtNode(trie, child, child.chars, commonCharacters, child.value, false); // reparent the previous node data
+                        reparentChildNode(child, commonCharacters);
 
                         // now re-attempt insertion at the
-                        key = key.substring( commonCharacters, keyLength);
-                        return putAtNode(trie, newParent, key, value);
-
+                        return putAtNode(trie, child, key, offset + commonCharacters, value, true);
                     }
                 } else {
                     // no common substring, order by first character
-                    if (key.charAt(0) < prefix.charAt(0)) {
+                    if (key[offset] < prefix[0]) {
                         // insert here at this index
-                        children.add(i, createValueNode(key, value));
+                        children.add(i, createValueNode(key, offset, value));
                         inserted = true;
-                        trie.size++;
+                        if (incrementSize) {
+                            trie.size++;
+                        }
                         break;
                     }
                 }
             }
             if (!inserted) {
                 // insertion is at the end of the list
-                children.add(createValueNode(key, value));
-                trie.size++;
+                children.add(createValueNode(key, offset, value));
+                if (incrementSize) {
+                    trie.size++;
+                }
                 return null;
             }
         }
         return null;
+    }
+
+    private static <V> void reparentChildNode(RadixTrieNode<V> node, int commonCharacters) {
+        //create a new child of the node, but with a [commonCharacters..] id
+        RadixTrieNode<V> child = new RadixTrieNode<V>();
+        child.value = node.value;
+        child.children = node.children;
+        int length = node.chars.length - commonCharacters;
+        child.chars = new char[length];
+        System.arraycopy(node.chars, commonCharacters, child.chars, 0, length);
+
+        node.value = null;
+        char[] oldChars = node.chars;
+        node.chars = new char[commonCharacters];
+        System.arraycopy(oldChars, 0, node.chars, 0, commonCharacters);
+        node.children = new ArrayList<>();
+        node.children.add(child);
+    }
+
+    static int numCharsInCommonPrefix(char[] prefix, char[] key, int offset) {
+        int keyLength = key.length;
+        int prefixLength = prefix.length;
+        int commonChars = 0;
+        for (int idx = 0; idx < prefixLength && offset < keyLength && prefix[idx] == key[offset]; offset++, idx++) {
+            commonChars++;
+        }
+        return commonChars;
+
     }
 
     static int numCharsInCommonPrefix(String prefix, String key) {
@@ -155,22 +182,10 @@ public class RadixTrie<V> implements Map<String, V> {
         return commonChars;
     }
 
-    static int numCharsInCommonPrefix(char[] prefix, String key) {
-        int keyLength = key.length();
-        int prefixLength = prefix.length;
-        int commonChars = 0;
-        for (int idx = 0; idx < prefixLength && idx < keyLength && prefix[idx] == key.charAt(idx); idx++) {
-            commonChars++;
-        }
-        return commonChars;
-    }
-
     // package private for unit testing
-    RadixTrieNode<V> getNode(RadixTrieNode<V> node, String key) {
+    RadixTrieNode<V> getNode(RadixTrieNode<V> node, char[] key, int offset) {
         if (node.chars != null) {
-            int length = Math.min(key.length(), node.chars.length);
-            String keyRemainder = key.substring(0, length);
-            if (keyRemainder.isEmpty()) {
+            if (offset == key.length) {
                 return node;
             }
         }
@@ -178,17 +193,13 @@ public class RadixTrie<V> implements Map<String, V> {
         if (children == null || children.isEmpty()) {
             return null;
         }
-        for (RadixTrieNode<V> childNode : node.children) {
-            if (key.startsWith(childNode.prefix)) {
-                if (key.equals(childNode.prefix)) {
-                    return childNode;
-                } else {
-                    return getNode(childNode, key.substring(childNode.chars.length, key.length()));
-                }
+        for (RadixTrieNode<V> childNode : children) {
+            int commonChars = numCharsInCommonPrefix(childNode.chars,key, offset);
+            if (commonChars == childNode.chars.length) {
+                return getNode(childNode, key, offset + commonChars);
             }
         }
         return null;
-
     }
 
     @Override
@@ -217,29 +228,33 @@ public class RadixTrie<V> implements Map<String, V> {
         return accumulator.getAccumulator();
     }
 
-
-    private static <V> RadixTrieNode<V> createValueNode(String key, V value) {
+    private static <V> RadixTrieNode<V> createValueNode(char[] key, int offset, V value) {
+        int prefixLength = key.length - offset;
         RadixTrieNode<V> node = new RadixTrieNode<>();
         node.value = value;
-        node.setPrefix(key);
+        node.chars = new char[prefixLength];
+        System.arraycopy(key, offset, node.chars, 0 , prefixLength);
         return node;
     }
 
     private interface TrieNodeVisitor<V> {
-        void visitNode(String keyPath, RadixTrieNode<V> node);
+        void visitNode(StringBuilder keyPath, RadixTrieNode<V> node);
     }
 
     private class TrieNodeWalker {
         void walkTrie(TrieNodeVisitor<V> visitor) {
-            walkTrie("", root, visitor);
+            walkTrie(new StringBuilder(), root, visitor);
         }
 
-        private void walkTrie(String priorprefix, RadixTrieNode<V> node, TrieNodeVisitor<V> visitor) {
+        private void walkTrie(StringBuilder priorprefix, RadixTrieNode<V> node, TrieNodeVisitor<V> visitor) {
             visitor.visitNode(priorprefix, node);
             List<RadixTrieNode<V>> children = node.children;
             if (children != null && !children.isEmpty()) {
                 for (RadixTrieNode<V> child : children) {
-                    walkTrie(priorprefix + child.prefix, child, visitor);
+                    int len = priorprefix.length();
+                    priorprefix.append(child.chars);
+                    walkTrie(priorprefix, child, visitor);
+                    priorprefix.setLength(len);
                 }
             }
         }
@@ -272,10 +287,10 @@ public class RadixTrie<V> implements Map<String, V> {
         Set<Map.Entry<String, V>> accumulator = new HashSet<>(size);
 
         @Override
-        public void visitNode(String keyPath, RadixTrieNode<V> node) {
+        public void visitNode(StringBuilder keyPath, RadixTrieNode<V> node) {
             if (node.value != null) {
                 Entry<V> entry = new Entry<>();
-                entry.key = keyPath;
+                entry.key = keyPath.toString();
                 entry.node = node;
                 accumulator.add(entry);
             }
@@ -291,7 +306,7 @@ public class RadixTrie<V> implements Map<String, V> {
         List<V> values = new ArrayList<>(size);
 
         @Override
-        public void visitNode(String keyPath, RadixTrieNode<V> node) {
+        public void visitNode(StringBuilder keyPath, RadixTrieNode<V> node) {
             if (node.value != null) {
                 values.add(node.value);
             }
@@ -306,9 +321,9 @@ public class RadixTrie<V> implements Map<String, V> {
         HashSet<String> keys = new HashSet<>(size);
 
         @Override
-        public void visitNode(String keyPath, RadixTrieNode<V> node) {
+        public void visitNode(StringBuilder keyPath, RadixTrieNode<V> node) {
             if (node.value != null) {
-                keys.add(keyPath);
+                keys.add(keyPath.toString());
             }
         }
 

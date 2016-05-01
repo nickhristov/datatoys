@@ -7,18 +7,11 @@ import java.util.List;
  */
 class RadixTrieNode<V> {
 
-    String prefix;
     char[] chars;
     List<RadixTrieNode<V>> children;
     V value;
 
-    public void setPrefix(String prefix) {
-        this.prefix = prefix;
-        chars = prefix.toCharArray();
-    }
-
-    @Override
     public String toString() {
-        return  prefix;
+        return new String (chars);
     }
 }
